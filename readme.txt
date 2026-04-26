@@ -1,1 +1,1 @@
-i will try to build a data driven dynamic pricing algorithme for a ride sharing app
+Built a geospatial dynamic pricing system that adjusts ride prices based on real-time supply-demand imbalance across H3 zones, using synthetic marketplace simulation and zone-level behavioral modeling.
