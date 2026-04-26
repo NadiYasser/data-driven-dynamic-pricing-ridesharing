@@ -1,2 +1,4 @@
 h3==4.1.2
+kafka-python==2.0.2
+numpy==1.26.4
 pymongo==4.10.1
