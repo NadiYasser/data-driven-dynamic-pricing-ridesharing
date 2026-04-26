@@ -1,0 +1,47 @@
+{
+  "h3_resolution": 7,
+  "random_seed": 42,
+  "area": {
+    "center_lat": 35.7595,
+    "center_lon": -5.8340,
+    "radius_km": 8   
+  },
+  "zone_types": [
+    {
+      "zone_type_id": "A",
+      "type": "downtown",
+      "base_demand": 50,
+      "base_supply": 40,
+      "price_sensitivity": 0.6,
+      "avg_distance": 3,
+      "probability": 0.1
+    },
+    {
+      "zone_type_id": "B",
+      "type": "residential",
+      "base_demand": 20,
+      "base_supply": 15,
+      "price_sensitivity": 1.0,
+      "avg_distance": 6,
+      "probability": 0.5
+    },
+    {
+      "zone_type_id": "C",
+      "type": "airport",
+      "base_demand": 15,
+      "base_supply": 20,
+      "price_sensitivity": 0.5,
+      "avg_distance": 15,
+      "probability": 0.05
+    },
+    {
+      "zone_type_id": "D",
+      "type": "suburb",
+      "base_demand": 5,
+      "base_supply": 2,
+      "price_sensitivity": 1.2,
+      "avg_distance": 7,
+      "probability": 0.35
+    }
+  ]
+}
