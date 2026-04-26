@@ -1,0 +1,1 @@
+i will try to build a data driven dynamic pricing algorithme for a ride sharing app
