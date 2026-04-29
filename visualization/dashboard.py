@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,7 @@ from typing import Any
 import h3
 import pydeck as pdk
 import streamlit as st
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
 from kafka.errors import NoBrokersAvailable
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError
@@ -28,14 +27,15 @@ RIDE_REQUESTS_TOPIC = os.getenv("RIDE_REQUESTS_TOPIC", "ride_requests")
 DRIVER_UPDATES_TOPIC = os.getenv("DRIVER_UPDATES_TOPIC", "driver_updates")
 PRICING_TOPIC = os.getenv("PRICING_TOPIC", "zone_pricing")
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
+KAFKA_API_VERSION = tuple(int(part) for part in os.getenv("KAFKA_API_VERSION", "3.9").split("."))
 MONGO_URI = os.getenv(
     "MONGO_URI",
     "mongodb://admin:admin@localhost:27017/dynamic_pricing?authSource=admin",
 )
 MONGO_DATABASE = os.getenv("MONGO_DATABASE", "dynamic_pricing")
 MONGO_ZONES_COLLECTION = os.getenv("MONGO_ZONES_COLLECTION", "zones")
-DASHBOARD_CONSUMER_GROUP = os.getenv("DASHBOARD_CONSUMER_GROUP", f"h3-map-dashboard-{uuid.uuid4()}")
 DEFAULT_EVENT_WINDOW_SECONDS = int(os.getenv("DASHBOARD_EVENT_WINDOW_SECONDS", "60"))
+INITIAL_TAIL_MESSAGES = int(os.getenv("DASHBOARD_INITIAL_TAIL_MESSAGES", "5000"))
 
 
 def parse_timestamp(value: str | None) -> datetime:
@@ -91,23 +91,55 @@ def load_zones() -> list[dict[str, Any]]:
     return zones
 
 
-def create_consumer() -> KafkaConsumer | None:
-    """Create a Kafka consumer for dashboard topics."""
+def dashboard_topics() -> list[str]:
+    """Return the Kafka topics rendered by the dashboard."""
 
+    return [RIDE_REQUESTS_TOPIC, DRIVER_UPDATES_TOPIC, PRICING_TOPIC]
+
+
+def create_consumer() -> KafkaConsumer | None:
+    """Create a manually assigned Kafka consumer for dashboard topics."""
+
+    topics = dashboard_topics()
     try:
-        return KafkaConsumer(
-            RIDE_REQUESTS_TOPIC,
-            DRIVER_UPDATES_TOPIC,
-            PRICING_TOPIC,
+        consumer = KafkaConsumer(
             bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
-            group_id=DASHBOARD_CONSUMER_GROUP,
-            auto_offset_reset="latest",
-            enable_auto_commit=True,
+            api_version=KAFKA_API_VERSION,
+            enable_auto_commit=False,
             key_deserializer=lambda value: value.decode("utf-8") if value else None,
             value_deserializer=lambda value: json.loads(value.decode("utf-8")),
-            consumer_timeout_ms=100,
+            consumer_timeout_ms=1000,
         )
+        topic_partitions = []
+        for topic in topics:
+            partitions = consumer.partitions_for_topic(topic) or set()
+            topic_partitions.extend(TopicPartition(topic, partition) for partition in partitions)
+
+        if not topic_partitions:
+            consumer.close()
+            st.session_state.kafka_status = "Connected to Kafka, but dashboard topics have no partitions yet."
+            return None
+
+        consumer.assign(topic_partitions)
+        beginning_offsets = consumer.beginning_offsets(topic_partitions)
+        end_offsets = consumer.end_offsets(topic_partitions)
+        for topic_partition in topic_partitions:
+            start_offset = max(
+                beginning_offsets[topic_partition],
+                end_offsets[topic_partition] - INITIAL_TAIL_MESSAGES,
+            )
+            consumer.seek(topic_partition, start_offset)
+
+        st.session_state.kafka_status = (
+            "Connected to Kafka topics: "
+            + ", ".join(sorted({topic_partition.topic for topic_partition in topic_partitions}))
+        )
+        return consumer
     except NoBrokersAvailable:
+        st.session_state.kafka_status = "Kafka is not available from the dashboard process."
+        return None
+    except Exception as exc:
+        st.session_state.kafka_status = f"Kafka dashboard consumer error: {type(exc).__name__}: {exc}"
         return None
 
 
@@ -120,6 +152,10 @@ def ensure_state() -> None:
         st.session_state.pricing_by_zone = {}
     if "consumer" not in st.session_state:
         st.session_state.consumer = create_consumer()
+    if "kafka_status" not in st.session_state:
+        st.session_state.kafka_status = "Kafka consumer has not been initialized."
+    if "kafka_records_read" not in st.session_state:
+        st.session_state.kafka_records_read = 0
 
 
 def consume_messages(max_records: int = 2000) -> None:
@@ -134,6 +170,7 @@ def consume_messages(max_records: int = 2000) -> None:
     for topic_partition_records in records.values():
         for record in topic_partition_records:
             event = record.value
+            st.session_state.kafka_records_read += 1
             if record.topic == PRICING_TOPIC:
                 st.session_state.pricing_by_zone[event["h3_zone"]] = event
             elif record.topic in {RIDE_REQUESTS_TOPIC, DRIVER_UPDATES_TOPIC}:
@@ -230,6 +267,19 @@ def build_event_rows(topic: str) -> list[dict[str, Any]]:
     return rows
 
 
+def event_counts() -> tuple[int, int]:
+    """Return current ride request and driver point counts in memory."""
+
+    request_count = 0
+    driver_count = 0
+    for event in st.session_state.events:
+        if event.get("topic") == RIDE_REQUESTS_TOPIC:
+            request_count += 1
+        elif event.get("topic") == DRIVER_UPDATES_TOPIC:
+            driver_count += 1
+    return request_count, driver_count
+
+
 def render_map(
     zone_rows: list[dict[str, Any]],
     show_requests: bool,
@@ -256,6 +306,7 @@ def render_map(
             pickable=True,
             stroked=True,
             filled=True,
+            opacity=0.45,
         )
     ]
 
@@ -266,9 +317,12 @@ def render_map(
                 "ScatterplotLayer",
                 data=request_rows,
                 get_position="[lon, lat]",
-                get_fill_color=[40, 90, 230, 170],
-                get_radius=45,
+                get_fill_color=[20, 70, 255, 245],
+                get_line_color=[255, 255, 255, 230],
+                get_radius=85,
+                line_width_min_pixels=1,
                 pickable=True,
+                stroked=True,
             )
         )
 
@@ -282,8 +336,11 @@ def render_map(
                 data=driver_rows,
                 get_position="[lon, lat]",
                 get_fill_color="color",
-                get_radius=35,
+                get_line_color=[255, 255, 255, 230],
+                get_radius=70,
+                line_width_min_pixels=1,
                 pickable=True,
+                stroked=True,
             )
         )
 
@@ -349,15 +406,22 @@ def main() -> None:
     total_demand = sum(row["demand_count"] for row in zone_rows)
     total_supply = sum(row["available_driver_count"] for row in zone_rows)
     avg_multiplier = sum(row["price_multiplier"] for row in zone_rows) / len(zone_rows) if zone_rows else 1.0
+    request_point_count, driver_point_count = event_counts()
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Tracked zones", len(zone_rows))
     metric_cols[1].metric("15s demand", total_demand)
     metric_cols[2].metric("15s available drivers", total_supply)
     metric_cols[3].metric("Average multiplier", f"{avg_multiplier:.2f}x")
+    st.caption(
+        f"Visible raw points in {event_window_seconds}s window: "
+        f"{request_point_count} requests, {driver_point_count} driver updates."
+    )
 
     if st.session_state.consumer is None:
-        st.warning("Kafka is not available yet. Start Kafka and refresh the dashboard.")
+        st.warning(st.session_state.kafka_status)
+    else:
+        st.caption(f"{st.session_state.kafka_status}. Records read: {st.session_state.kafka_records_read}")
 
     render_map(zone_rows, show_requests, show_drivers, show_labels)
 

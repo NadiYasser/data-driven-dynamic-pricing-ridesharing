@@ -36,6 +36,7 @@ LOGGER = logging.getLogger(__name__)
 RIDE_REQUESTS_TOPIC = os.getenv("RIDE_REQUESTS_TOPIC", "ride_requests")
 DRIVER_UPDATES_TOPIC = os.getenv("DRIVER_UPDATES_TOPIC", "driver_updates")
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
+KAFKA_API_VERSION = tuple(int(part) for part in os.getenv("KAFKA_API_VERSION", "3.9").split("."))
 MONGO_URI = os.getenv(
     "MONGO_URI",
     "mongodb://admin:admin@localhost:27017/dynamic_pricing?authSource=admin",
@@ -70,6 +71,7 @@ def create_kafka_producer() -> KafkaProducer:
         try:
             return KafkaProducer(
                 bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
+                api_version=KAFKA_API_VERSION,
                 key_serializer=lambda value: value.encode("utf-8"),
                 value_serializer=lambda value: json.dumps(value).encode("utf-8"),
                 linger_ms=20,

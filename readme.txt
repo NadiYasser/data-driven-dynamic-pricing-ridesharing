@@ -40,6 +40,9 @@ Pricing environment variables:
 - PRICING_MAX_MULTIPLIER defaults to 1.5
 - PRICING_PRESSURE_WEIGHT defaults to 0.4
 - PRICING_CHECKPOINT_LOCATION defaults to /tmp/dynamic_pricing/pricing_stream
+- KAFKA_API_VERSION defaults to 3.9 for Python Kafka clients
+- DASHBOARD_INITIAL_TAIL_MESSAGES defaults to 5000, controlling how many recent
+  records per topic partition the dashboard reads when it starts
 
 If the Spark pricing stream fails with a Kafka offset/data-loss message during
 local development, start with a fresh checkpoint:
